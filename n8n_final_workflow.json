@@ -1,0 +1,137 @@
+{
+  "name": "Google Maps Lead Scraper — FINAL",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "cronExpression", "expression": "0 9 * * 1" }]
+        }
+      },
+      "name": "Every Monday 9AM",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300],
+      "id": "trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ============================================================\n// ✏️  EDIT YOUR SEARCH SETTINGS HERE\n// ============================================================\n\nconst SEARCHES = [\n  { keyword: 'dentists',            location: 'Los Angeles California' },\n  // ADD MORE SEARCHES BELOW — just copy the line above\n  // { keyword: 'plumbers',         location: 'Los Angeles California' },\n  // { keyword: 'HVAC',             location: 'Houston Texas' },\n  // { keyword: 'roofing',          location: 'Dallas Texas' },\n  // { keyword: 'electricians',     location: 'New York City' },\n  // { keyword: 'lawyers',          location: 'Chicago Illinois' },\n  // { keyword: 'real estate',      location: 'Miami Florida' },\n  // { keyword: 'auto repair',      location: 'Phoenix Arizona' },\n  // { keyword: 'dentists',         location: 'San Francisco California' },\n  // { keyword: 'plumbers',         location: 'San Diego California' },\n];\n\n// ============================================================\n// YOUR API KEY — paste it here\nconst SERPAPI_KEY = 'PASTE_YOUR_SERPAPI_KEY_HERE';\n// ============================================================\n\nreturn SEARCHES.map(s => ({\n  json: {\n    keyword:    s.keyword,\n    location:   s.location,\n    api_key:    SERPAPI_KEY,\n    query:      s.keyword + ' in ' + s.location\n  }\n}));"
+      },
+      "name": "⚙️ SETTINGS — Edit Keywords Here",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "id": "settings"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "https://serpapi.com/search",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            { "name": "engine",   "value": "={{ $json.engine || 'google_maps' }}" },
+            { "name": "q",        "value": "={{ $json.query }}" },
+            { "name": "type",     "value": "search" },
+            { "name": "api_key",  "value": "={{ $json.api_key }}" }
+          ]
+        },
+        "options": {}
+      },
+      "name": "SerpAPI — Search Google Maps",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [480, 300],
+      "id": "serpapi"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and clean each business from SerpAPI results\nconst input = $input.first().json;\nconst results = input.local_results || [];\n\nif (results.length === 0) {\n  console.log('No results found');\n  return [];\n}\n\nreturn results.map(place => ({\n  json: {\n    name:            place.title                               || '',\n    phone:           place.phone                               || '',\n    website:         place.website                             || '',\n    address:         place.address                             || '',\n    city:            (place.address||'').split(',').slice(-3,-2)[0]?.trim() || '',\n    state:           (place.address||'').split(',').slice(-2,-1)[0]?.replace(/\\d+/g,'').trim() || '',\n    rating:          place.rating   ? String(place.rating)    : '',\n    reviews:         place.reviews  ? String(place.reviews)   : '',\n    type:            place.type                                || '',\n    google_maps_url: place.place_id ? 'https://www.google.com/maps/place/?q=place_id:' + place.place_id : '',\n    hours:           place.hours                               || '',\n    owner_name:      '',\n    owner_email:     '',\n    scraped_date:    new Date().toISOString().split('T')[0]\n  }\n}));"
+      },
+      "name": "Clean & Transform Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 300],
+      "id": "transform"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Remove duplicate businesses\nconst seen = new Set();\nconst unique = [];\n\nfor (const item of $input.all()) {\n  const key = (item.json.name + '|' + item.json.phone).toLowerCase().trim();\n  if (!seen.has(key) && item.json.name) {\n    seen.add(key);\n    unique.push(item);\n  }\n}\n\nconsole.log('Deduped: ' + $input.all().length + ' -> ' + unique.length);\nreturn unique;"
+      },
+      "name": "Deduplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 300],
+      "id": "dedupe"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Only keep businesses with phone OR website\nconst filtered = $input.all().filter(item => item.json.phone || item.json.website);\nconsole.log('Kept ' + filtered.length + ' with contact info');\nreturn filtered;"
+      },
+      "name": "Filter — Has Contact Info",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 300],
+      "id": "filter"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "value": "PASTE_YOUR_GOOGLE_SHEET_URL_HERE",
+          "mode": "url"
+        },
+        "sheetName": {
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData"
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED",
+          "useAppend": true
+        }
+      },
+      "name": "Add to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [1440, 300],
+      "id": "sheets"
+    },
+    {
+      "parameters": {
+        "jsCode": "const count = $input.all().length;\nconst msg = '✅ Done! Added ' + count + ' leads to Google Sheets at ' + new Date().toISOString();\nconsole.log(msg);\nreturn [{ json: { status: 'success', leads_added: count, timestamp: new Date().toISOString() } }];"
+      },
+      "name": "Log Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 300],
+      "id": "log"
+    }
+  ],
+  "connections": {
+    "Every Monday 9AM": {
+      "main": [[{ "node": "⚙️ SETTINGS — Edit Keywords Here", "type": "main", "index": 0 }]]
+    },
+    "⚙️ SETTINGS — Edit Keywords Here": {
+      "main": [[{ "node": "SerpAPI — Search Google Maps", "type": "main", "index": 0 }]]
+    },
+    "SerpAPI — Search Google Maps": {
+      "main": [[{ "node": "Clean & Transform Data", "type": "main", "index": 0 }]]
+    },
+    "Clean & Transform Data": {
+      "main": [[{ "node": "Deduplicate", "type": "main", "index": 0 }]]
+    },
+    "Deduplicate": {
+      "main": [[{ "node": "Filter — Has Contact Info", "type": "main", "index": 0 }]]
+    },
+    "Filter — Has Contact Info": {
+      "main": [[{ "node": "Add to Google Sheets", "type": "main", "index": 0 }]]
+    },
+    "Add to Google Sheets": {
+      "main": [[{ "node": "Log Results", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": { "executionOrder": "v1" }
+}
